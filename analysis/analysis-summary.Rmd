@@ -1,0 +1,198 @@
+---
+title: SEMSOC 
+subtitle: Summary statistics
+author: Molly Lewis and Gary Lupyan
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: false
+    theme: cerulean
+    toc_float: true
+    code_folding: hide
+---
+
+Are semantic networks related to demographic variables? Summary statistics of data from [Small World of Words](http://smallworldofwords.com/blog/?page_id=21).
+
+```{r setup, include = F}
+
+rm(list = ls())
+
+# load packages
+library(knitr)
+library(rmarkdown)
+library(ggplot2)
+library(dplyr)
+library(langcog)
+library(tidyr)
+library(broom)
+library(reshape2)
+
+opts_chunk$set(echo = T, message = F, warning = F, 
+               error = F, cache = T, tidy = F)
+```
+
+
+## Read in and munge 
+```{r}
+d = read.csv("../data/associations_ppdetails_en_05_01_2015.csv")
+
+d.clean = d %>%
+  filter(gender == "Ma"| gender ==  "Fe") %>%
+  filter(education > 0) %>%
+  filter(nativeLanguage != "") %>%
+  mutate(gender = droplevels(gender),
+         gender = plyr::revalue(gender,c("Fe" = "F", "Ma" = "M")),
+         userID = as.factor(userID),
+         nativeLanguage = as.factor(tolower(nativeLanguage)),
+         education = as.factor(education),
+         education = plyr::revalue(education,c("1" = "none", 
+                                               "2" = "elementary",
+                                               "3" = "HS", 
+                                               "4" = "bachelor", 
+                                               "5" = "master")))
+```
+
+## Summarize demographic data
+```{r}
+demo.summary = d.clean %>%
+  group_by(userID) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(1:5) 
+
+PROP_FEMALE = round(nrow(filter(demo.summary, gender == "F"))/nrow(demo.summary),2)
+```
+
+We have complete demographic data for  `r nrow(demo.summary)` participant. `r PROP_FEMALE * 100`% are female. 
+
+### Age distribution
+```{r}
+ggplot(demo.summary, aes(x=age)) + 
+    geom_density(alpha=.3, fill="#FF6666") + 
+    geom_vline(xintercept = mean(demo.summary$age), linetype = "longdash") +
+    theme_bw(base_size = 18)
+```
+
+The population is relatively young (_M_ =  `r round(mean(demo.summary$age),2)`).
+
+#### By gender
+```{r}
+ggplot(demo.summary, aes(x=age, group = gender, fill = gender)) + 
+    geom_density(alpha=.3) + 
+    theme_bw(base_size = 18)
+```
+
+### Language distribution
+```{r}
+lang = demo.summary %>%
+        group_by(nativeLanguage) %>%
+        summarise(n = n())
+  
+ggplot(lang, aes(x = reorder(nativeLanguage,-n), y = n)) + 
+    geom_bar(stat = "identity") + 
+    xlab("language") +
+    theme_bw(base_size = 15) +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Most have language "usa", followed by "great britain", "canada", and "australia". Which means, everyone is an english speaker?
+
+### Education distribution
+```{r}
+education = demo.summary %>%
+        group_by(education) %>%
+        summarise(n = n())
+  
+ggplot(education, aes(x = education, y = n)) + 
+    geom_bar(stat = "identity") + 
+    xlab("education level") +
+    theme_bw(base_size = 18) +
+    theme(legend.position="none")
+```
+
+Pretty highly educated group. 
+
+#### by gender
+```{r}
+education.gender = demo.summary %>%
+        group_by(education) %>%
+        summarise (n=n()) %>%
+        left_join(demo.summary %>% group_by(education) %>% 
+                    filter(gender == "F") %>% 
+                    summarise(female = n()), by= "education") %>%
+        mutate(male = n - female) %>%
+        mutate (p.female = female/n,
+                p.male = male/n) %>%
+        gather("gender", "prop", 5:6)
+  
+ggplot(education.gender, aes(x = education, fill = gender, y = prop)) + 
+    geom_bar(stat = "identity") + 
+    geom_hline(yintercept = PROP_FEMALE, linetype = "longdash") +
+    xlab("education level") +
+    theme_bw(base_size = 18) 
+```
+
+The dashed line is the total proportion female. Females are slightly more educated than males.
+
+#### by age
+```{r}
+ggplot(demo.summary, aes(x=age, group = education, fill = education)) + 
+    geom_density(alpha=.3) + 
+    theme_bw(base_size = 18)
+```
+
+## Summarize word data
+
+### Num trials per participant
+```{r}
+d.clean %>%
+  group_by(userID) %>%
+  summarise(n= n()) %>%
+  ggplot(aes(x = n)) +
+    geom_histogram(binwidth = 1) +
+    xlab("n trials per participants") +
+    ylab("n participants") +
+    theme_bw(base_size = 15) 
+```
+
+Most participants completed 15, 16, or 18 trials.
+
+### Cues
+```{r}
+word.summary = d.clean %>%
+  group_by(cue) %>%
+  summarise(n = n()) 
+
+ggplot(word.summary, aes(x = reorder(cue,-n), y = n)) + 
+    geom_bar(stat = "identity") + 
+    ylab("n trials")+
+    xlab("distinct cue words") +
+    geom_hline(yintercept = mean(word.summary$n), color = "red", 
+               linetype = "longdash") +
+    theme_bw(base_size = 12) +
+    theme(legend.position="none",
+          axis.ticks = element_blank(), axis.text.x = element_blank())
+```
+
+There are `r nrow(word.summary)` unique cue words. We have `r nrow(filter(word.summary, n>75))` different cue words with more than 75 trials.
+
+### Associations
+```{r}
+word.a.summary = d.clean %>%
+  gather("association", "word", 7:9) %>%
+  mutate(word = gsub("\\bx\\b", NA, word)) %>% # replace "don't knows" with NA
+  group_by(association) %>%
+  summarise(n_na = length(which(is.na(word))),
+            n = n(),
+            prop.missing= n_na/n())
+
+ggplot(word.a.summary, aes(y=prop.missing, x = association)) + 
+    geom_bar(stat = "identity") + 
+    ylab("number missing") +
+    theme_bw(base_size = 18) 
+```
+
+Participants can say they don't know a word to skip it (but apparently this means they can still enter some associations?). This shows the proportion missing for each assocation, which is about 10%. 
+

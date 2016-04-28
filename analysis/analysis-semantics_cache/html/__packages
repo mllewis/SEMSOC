@@ -1,0 +1,11 @@
+base
+knitr
+rmarkdown
+ggplot2
+dplyr
+langcog
+tidyr
+broom
+reshape2
+bitops
+RCurl

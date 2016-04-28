@@ -1,0 +1,963 @@
+---
+title: SEMSOC 
+subtitle: Semantic analyses
+author: Molly Lewis and Gary Lupyan
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: false
+    theme: cerulean
+    toc_float: true
+    code_folding: hide
+---
+
+Are semantic networks related to demographic variables? Summary statistics of data from [Small World of Words](http://smallworldofwords.com/blog/?page_id=21).
+
+```{r setup, include = F}
+rm(list = ls())
+
+# load packages
+library(knitr)
+library(rmarkdown)
+library(ggplot2)
+library(dplyr)
+library(langcog)
+library(tidyr)
+library(broom)
+library(reshape2)
+library(RCurl)
+
+opts_chunk$set(echo = T, message = F, warning = F, 
+               error = F, cache = T, tidy = F)
+```
+
+```{r}
+d = read.csv("../data/associations_ppdetails_en_05_01_2015.csv")
+
+d.clean = d %>%
+  filter(gender == "Ma"| gender ==  "Fe") %>%
+  filter(education > 0) %>%
+  filter(nativeLanguage != "") %>%
+  mutate(gender = droplevels(gender),
+         gender = plyr::revalue(gender,c("Fe" = "F", "Ma" = "M")),
+         userID = as.factor(userID),
+         nativeLanguage = as.factor(tolower(nativeLanguage)))
+
+d.clean = d.clean %>%
+  gather("association", "word", 7:9) %>%
+  mutate(word = gsub("\\bx\\b", "NA", word)) %>% # remove missing words
+  spread("association", "word") %>%
+  rename(a1 = asso1Clean,
+         a2 = asso2Clean,
+         a3 = asso3Clean)
+```
+
+## Frequency{.tabset}
+
+Merge in frquency data. Frequency taken here from subtlex-us (Brysbaert & New, 2009).
+```{r}
+subtlexus.url <- getURL("https://raw.githubusercontent.com/mllewis/RC/master/data/corpus/SUBTLEXus_corpus.txt")
+freqs <- read.table(text = subtlexus.url, header=TRUE) %>%
+          select(Word,Lg10WF)
+```
+
+### All
+
+```{r}
+freq.data = d.clean %>%
+            left_join(freqs, by = c("cue" = "Word")) %>%
+            rename(cue.freq.log = Lg10WF) %>%
+            left_join(freqs, by = c("a1" = "Word")) %>%
+            rename(a1.freq.log = Lg10WF) %>%
+            left_join(freqs, by = c("a2" = "Word")) %>%
+            rename(a2.freq.log = Lg10WF) %>%
+            left_join(freqs, by = c("a3" = "Word")) %>%
+            rename(a3.freq.log = Lg10WF)
+
+freq.ms.type = freq.data %>%
+               gather("word_type", "freq", 10:13) %>%
+              mutate(word_type= as.factor(word_type)) %>%
+               group_by(userID, word_type) %>%
+               summarise(mean.freq = mean(freq))  %>%
+               group_by(word_type) %>%
+               multi_boot_standard(column = "mean.freq", na.rm = T)  
+
+levels(freq.ms.type$word_type) = c("a1", "a2", "a3", "cue")
+freq.ms.type$word_type = factor(freq.ms.type$word_type,levels(freq.ms.type$word_type)[c(4, 1:3)])
+
+ggplot(freq.ms.type, aes(x = word_type, y = mean, group = 1)) +
+  geom_line(color = "black") +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Word Type") +
+  ylab("Mean log frequency") +
+  theme_bw(base_size = 15) +
+  theme(legend.position="none") 
+
+```
+
+Might be interesting to condition on cue here, by binning frequency.
+
+### Education
+
+Mean frequency
+```{r}
+freq.ms = freq.data %>%
+               gather("association", "freq", 11:13) %>%
+               group_by(userID) %>%
+               summarise(mean.assoc.freq = mean(freq, na.rm = T))
+
+freq.ed.ms = freq.ms %>%
+              left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID)) %>%
+              group_by(education) %>%
+              multi_boot_standard(column = "mean.assoc.freq", na.rm = T) %>%
+              filter(education > 1)
+
+ggplot(freq.ed.ms, aes(y = mean, x = education)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line() +
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates") +
+  scale_x_continuous(breaks = c(2,3,4,5), labels = c("elementary", "HS",
+                                                     "bachelor", "master"))
+```
+
+Change in frequency across associates.
+```{r}
+freq.ms.as = freq.data %>%
+             group_by(userID) %>%
+            summarise(mean.a1.freq = mean(a1.freq.log, na.rm = T),
+                         mean.a2.freq = mean(a2.freq.log, na.rm = T),
+                         mean.a3.freq = mean(a3.freq.log, na.rm = T))
+          
+freq.ms.as2 = freq.ms.as %>%
+          left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID)) %>%
+          gather(association, value, 2:4) %>%
+          group_by(education, association) %>%
+          multi_boot_standard(column = "value", na.rm = T) %>%
+          filter(education > 1) %>%
+          ungroup() %>%
+          mutate(education = as.factor(education))
+
+ggplot(freq.ms.as2, aes(y = mean, x = association, 
+                        group = education, color = education)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line()+
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates") +
+  scale_x_discrete(labels=c("1", "2", "3")) +
+  scale_colour_discrete(labels = c("elementary", "HS", "bachelor", "master"))
+```
+Frequency decreases across assocates, for all age groups.
+
+
+### Age
+
+Mean frequency
+```{r}
+freq.age.ms = freq.ms %>%
+               left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age, userID)) %>%
+               #mutate(age.bin = cut_width(age, width = 2)) %>%
+               group_by(age) %>%
+               multi_boot_standard(column = "mean.assoc.freq", na.rm = T)
+
+ggplot(freq.age.ms, aes(y = mean, x = age)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower), size = .2) +
+  #geom_line() +
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates")
+
+freq.age.ms %>%
+  filter(age > 15 & age < 75) %>%
+  ggplot(aes(y = mean, x = age)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_smooth(method = "lm") +
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates")
+
+```
+
+```{r}
+freq.all.ms = freq.ms %>%
+              left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, age, userID)) 
+
+tidy(lm(mean.assoc.freq~age + education, filter(freq.all.ms, education > 0)))
+```
+Education does not predict frequency, controling for age.
+
+Change in frequency across associates.
+```{r}
+freq.ms.as2 = freq.ms.as %>%
+          left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age, userID)) %>%
+          mutate(age.bin = cut_width(age, width = 25)) %>%
+          gather(association, value, 2:4) %>%
+          group_by(age.bin, association) %>% 
+          multi_boot_standard(column = "value", na.rm = T)
+
+ggplot(freq.ms.as2, aes(y = mean, x = association, 
+                        group = age.bin, color = age.bin)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line()+
+  facet_grid(.~age.bin) +
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates") +
+  scale_x_discrete(labels=c("1", "2", "3")) 
+```
+
+
+### Gender
+
+Mean frequency
+```{r}
+freq.gender.ms = freq.ms %>%
+               left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID)) %>%
+               group_by(gender) %>%
+               multi_boot_standard(column = "mean.assoc.freq", na.rm = T)
+
+ggplot(freq.gender.ms, aes(y = mean, x = gender)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower), size = .2) +
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates")
+
+freq.all.ms = freq.ms %>%
+              left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, age, education, userID)) 
+
+tidy(lm(mean.assoc.freq~age + gender + education, freq.all.ms))
+```
+Females have higher frequency associates, controling for age and education.
+
+Change in frequency across associates.
+```{r}
+freq.ms.as2 = freq.ms.as %>%
+          left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID)) %>%
+          gather(association, value, 2:4) %>%
+          group_by(gender, association) %>% 
+          multi_boot_standard(column = "value", na.rm = T)
+
+ggplot(freq.ms.as2, aes(y = mean, x = association, 
+                        group = gender, color = gender)) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line()+
+  theme_bw(base_size = 15) +
+  ylab("mean log frequency of associates") +
+  scale_x_discrete(labels=c("1", "2", "3")) 
+```
+
+
+### Language/country
+Mean frequency
+```{r}
+top_langs = d.clean %>%
+        group_by(userID) %>%
+        slice(1) %>%
+        group_by(nativeLanguage) %>%
+        summarise(n = n()) %>%
+        top_n(10,n) %>%
+        select(nativeLanguage)
+
+freq.ms = freq.data %>%
+               gather("association", "freq", 11:13) %>%
+               group_by(userID) %>%
+               summarise(mean.assoc.freq = mean(freq, na.rm = T))
+
+freq.lang.ms = freq.ms %>%
+               left_join(freq.data %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(nativeLanguage, userID)) %>%
+               filter(nativeLanguage %in% levels(droplevels(top_langs$nativeLanguage))) %>%
+               group_by(nativeLanguage) %>%
+               multi_boot_standard(column = "mean.assoc.freq", na.rm = T)
+
+ggplot(freq.lang.ms, aes(y = mean, x = reorder(nativeLanguage,-mean))) + 
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower), size = .2) +
+  theme_bw(base_size = 15) +
+  xlab("country (top 10)") +
+  ylab("mean log frequency of associates")
+```
+Second language speakers have higher frequency associates than native speakers?
+
+## Part of speech
+
+Read in POS
+```{r}
+pos2 = d.clean %>%
+          gather("category", "word", 6:9) %>%
+          select(word) %>%
+          filter(!grepl(" ", word)) %>%
+          distinct(word)
+          
+# write.csv(pos2, "all_words.csv", row.names = F, col.names = F)
+# run pos_tagger.py script
+
+pos = read.csv("../data/pos_all_words.csv",
+               col.names = c("word", "pos"), header = F)
+sent = read.csv("../data/sent_all_words.csv", 
+                col.names = c("word", "polarity", "subjectivity"), header = F)
+lemma = read.csv("../data/lemma_all_words.csv",
+                 col.names = c("word", "lemma"), header = F)
+
+```
+
+Make POS human readable (Penn POS)
+```{r}
+pos.collapsed = pos %>%
+  mutate(pos = as.character(pos)) %>%
+  rowwise() %>%
+  mutate(pos = if(is.na(pos)) as.character(pos)
+                      else if(pos == "VB" | pos == "VBD" | pos == "VBG" | pos == "VBN" | pos == "VBP" | pos == "VBZ" ) "verb" 
+                      else if(pos == "NN" | pos == "NNP" | pos == "NNS") "noun" 
+                      else if(pos == "JJ" | pos == "JJR"| pos == "JJS") "adjective" 
+                      else if(pos == "RB" | pos == "RBR") "adverb"
+                      else if(pos == "DT") "determiner"
+                      else if(pos == "PRP" | pos == "PRP$"| pos == "WP" | pos ==  "WDT" | pos == "WP$"  | pos == "WRB" ) "pronoun"
+                      else if (pos == "CC") "conjunction"
+                      else if (pos == "CD") "number"
+                      else if (pos == "FW") "foreign word"
+                      else if (pos == "IN") "preposition"
+                      else if (pos == "MD") "modal"
+                      else pos)
+```
+
+Merge datasets.
+```{r}
+all_words = d.clean %>%
+          gather("category", "word", 6:9) %>%
+          select(word) %>%
+          filter(!grepl(" ", word)) %>%
+          distinct(word) %>%
+          left_join(pos.collapsed) %>%
+          left_join(sent) %>%
+          left_join(lemma) 
+
+d.all = d.clean %>%
+            left_join(all_words, by = c("cue" = "word")) %>%
+            rename(cue.pos = pos,
+                   cue.polarity = polarity,
+                   cue.subjectivity = subjectivity,
+                   cue.lemma = lemma) %>%
+            left_join(all_words, by = c("a1" = "word")) %>%
+            rename(a1.pos = pos,
+                   a1.polarity = polarity,
+                   a1.subjectivity = subjectivity,
+                   a1.lemma = lemma) %>%
+            left_join(all_words, by = c("a2" = "word")) %>%
+            rename(a2.pos = pos,
+                   a2.polarity = polarity,
+                   a2.subjectivity = subjectivity,
+                   a2.lemma = lemma) %>%
+            left_join(all_words, by = c("a3" = "word")) %>%
+            rename(a3.pos = pos,
+                   a3.polarity = polarity,
+                   a3.subjectivity = subjectivity,
+                   a3.lemma = lemma) %>%
+            select(userID:education, starts_with('cue'), 
+                   starts_with('a1'),
+                   starts_with('a2'),
+                   starts_with('a3'))
+```
+
+### All
+Distribution of cue words
+```{r}
+d.pos.props = d.all %>%
+  select(cue.pos, a1.pos, a2.pos,a3.pos) %>%
+  gather("word_type", "pos", 1:4) %>%
+  mutate(word_type = as.factor(word_type)) %>%
+  group_by(word_type, pos) %>%
+  filter(!is.na(pos)) %>%
+  summarise(n= n()) %>%
+  mutate(prop = n / sum(n)) %>%
+  filter(prop > .005)  # filter out low frequency POS
+
+levels(d.pos.props$word_type) = c("a1", "a2", "a3", "cue")
+d.pos.props$word_type = factor(d.pos.props$word_type,levels(d.pos.props$word_type)[c(4, 1:3)])
+  
+ggplot(d.pos.props, aes(x = reorder(pos,-prop), y = prop, fill = pos)) + 
+    facet_grid(.~word_type) +
+    geom_bar(stat = "identity") + 
+    ylab("proportion") +
+    xlab("part of speech") +
+    ggtitle("Distribution of words") +
+    ylim(0,1)+
+    theme_bw(base_size = 15) +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+```{r}
+d.pos.props.na = d.all %>%
+  select(cue.pos, a1.pos, a2.pos,a3.pos) %>%
+  gather("word_type", "pos", 1:4) %>%
+  mutate(word_type = as.factor(word_type)) %>%
+  group_by(word_type, pos) %>%
+  summarise(n= n()) %>%
+  mutate(prop = n / sum(n)) %>%
+  filter(prop > .005) %>%  # filter out low frequency POS
+  filter(is.na(pos))
+
+levels(d.pos.props.na$word_type) = c("a1", "a2", "a3", "cue")
+d.pos.props.na$word_type = factor(d.pos.props.na$word_type,levels(d.pos.props.na$word_type)[c(4, 1:3)])
+  
+ggplot(d.pos.props.na, aes(x = word_type, y = prop,group = word_type)) + 
+    geom_bar(stat = "identity") + 
+    ylab("proportion") +
+    xlab("Condition") +
+    ggtitle("Proportion NA") +
+    ylim(0,1)+
+    theme_bw(base_size = 15) +
+    theme(legend.position="none",
+          axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+Most of these untagged words are two word responses, some of which we probably want to include (e.g. "lunch box"), but not sure how to filter those from non-single-item phrases ("not sure" or "pants and trousers").
+
+### Education{.tabset}
+
+#### Prop category assocations
+```{r}
+pos.counts = d.all %>%
+  filter(cue.pos == "noun" | cue.pos == "adjective" | cue.pos == "verb") %>%
+  gather("a.pos", "pos", c(12,17,22)) %>%
+  select(-cue, -a1, -a2, -a3, -contains("polarity"), -contains("subjectivity"), -contains("lemma")) %>%
+    filter(pos == "noun" | pos == "adjective" | pos == "verb") 
+
+pos.props.all = pos.counts %>%
+  group_by(pos, userID) %>%
+  summarise(n = n()) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID)) %>%
+  left_join(pos.counts %>% group_by(userID) %>% filter(!is.na(pos)) %>% 
+              summarise(all = n())) %>%
+  mutate(prop = n/all) %>%
+  group_by(education, pos) %>%
+  multi_boot_standard(column = "prop", na.rm = T) %>%
+  filter(education > 1) %>%
+  ungroup() %>%
+  mutate(education = as.factor(education))
+
+ggplot(pos.props.all, aes(x = reorder(pos, -mean), y = mean,
+                          group = education, color = education)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("association pos") +
+  ylab("mean prop association pos") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15)
+```
+
+#### Condition on cue
+```{r}
+pos.counts = d.all %>%
+  filter(cue.pos == "noun" | cue.pos == "adjective" | cue.pos == "verb") %>%
+  filter(education > 1) %>%
+  group_by(cue.pos, education) %>%
+  summarise(n = n(),
+            a1_noun = length(which(a1.pos == "noun")),
+            a1_adjective = length(which(a1.pos == "adjective")),
+            a1_verb = length(which(a1.pos == "verb")), 
+            a2_noun = length(which(a2.pos == "noun")),
+            a2_adjective = length(which(a2.pos == "adjective")),
+            a2_verb = length(which(a2.pos == "verb")), 
+            a3_noun = length(which(a3.pos == "noun")),
+            a3_adjective = length(which(a3.pos == "adjective")),
+            a3_verb = length(which(a3.pos == "verb")))
+
+pos.props = pos.counts %>%
+  gather("var", "value", 4:12) %>%
+  mutate(prop = value/n) %>%
+  mutate(a = unlist(lapply(strsplit(var,"_"),function(x) x[1])),
+         a_pos = unlist(lapply(strsplit(var,"_"),function(x) x[2]))) %>%
+  select(-var) %>%
+  mutate(education = as.factor(education))
+
+
+ggplot(pos.props, aes(x = reorder(a_pos,-prop), 
+                      y = prop, group = education, color = education)) +
+  geom_line(stat= "identity") +  
+  geom_point(stat= "identity") +
+  facet_grid(cue.pos~a ) +
+  xlab("association part of speech") +
+  theme_bw()
+```
+
+No differences of POS by education.
+
+### Age{.tabset}
+
+#### Prop category assocations
+```{r}
+d.pos.age = d.all %>%
+            filter(age > 15 & age < 75) %>%
+            mutate(age.bin = cut_width(age, width = 10))
+
+pos.prop.age = d.all %>%
+  select(userID, age, gender, contains("pos")) %>%
+  gather("a.pos", "pos", c(5:7)) %>%
+  filter(pos == "noun" | pos == "adjective" | pos == "verb") %>%
+  group_by(userID) %>%
+  summarise(noun = length(which(pos == "noun"))/n(),
+            adjective = length(which(pos == "adjective"))/n(),
+            verb = length(which(pos == "verb"))/n()) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID))  %>%
+  gather("type", "prop", 2:4) %>%
+  group_by(age.bin, type) %>%   
+  multi_boot_standard(column = "prop", na.rm = T) %>%
+  filter(!is.na(age.bin))
+
+ggplot(pos.prop.age, aes(x = age.bin, y = mean, colour = type, group = type)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line() + 
+  xlab("association pos") +
+  ylab("age bin") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+No differences of POS by age. 
+
+#### Condition on cue
+```{r}
+pos.prop.age.cuetype = d.all %>%
+  select(userID, age, gender, contains("pos")) %>%
+  gather("a.pos", "pos", c(5:7)) %>%
+  filter(pos == "noun" | pos == "adjective" | pos == "verb") %>%
+  filter(cue.pos == "noun" | cue.pos == "adjective" | cue.pos == "verb") %>%
+  group_by(userID, cue.pos) %>%
+  summarise(noun = length(which(pos == "noun"))/n(),
+            adjective = length(which(pos == "adjective"))/n(),
+            verb = length(which(pos == "verb"))/n()) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID))  %>%
+  gather("a.pos", "prop", 3:5) %>%
+  group_by(age.bin, a.pos, cue.pos) %>%   
+  multi_boot_standard(column = "prop", na.rm = T) %>%
+  filter(!is.na(age.bin))
+
+ggplot(pos.prop.age.cuetype, aes(x = age.bin, y = mean, 
+                                 colour = a.pos, group = a.pos)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  facet_grid(.~cue.pos) +
+  xlab("age bin") +
+  ylab("Proportion assocations") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+This plot is faceted by the cue POS. So, each point is the probability of giving an associate of a particular POS, given a cue POS, across development.
+
+It looks like there may be an effect of age given a verb cue: Older people are more likely to respond with another verb than younger people (who respond with nouns). A similar story holds for adjectives.
+
+### Gender{.tabset}
+
+#### Prop. category associations
+```{r}
+pos.prop.gender = d.all %>%
+  select(userID, age, gender, contains("pos")) %>%
+  gather("a.pos", "pos", c(5:7)) %>%
+  filter(pos == "noun" | pos == "adjective" | pos == "verb") %>%
+  group_by(userID) %>%
+  summarise(noun = length(which(pos == "noun"))/n(),
+            adjective = length(which(pos == "adjective"))/n(),
+            verb = length(which(pos == "verb"))/n()) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID))  %>%
+  gather("type", "prop", 2:4) %>%
+  group_by(gender, type) %>%   
+  multi_boot_standard(column = "prop", na.rm = T)  %>%
+  filter(!is.na(gender))
+
+ggplot(pos.prop.gender, aes(x = reorder(type,-mean), 
+                            y = mean, group = gender,
+                            color = gender)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line() + 
+  xlab("association pos") +
+  ylab("prop associations") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+No effect of gender.
+
+#### Condition on cue
+```{r}
+pos.prop.gender.cuetype = d.all %>%
+  select(userID, age, gender, contains("pos")) %>%
+  gather("a.pos", "pos", c(5:7)) %>%
+  filter(pos == "noun" | pos == "adjective" | pos == "verb") %>%
+  filter(cue.pos == "noun" | cue.pos == "adjective" | cue.pos == "verb") %>%
+  group_by(userID, cue.pos) %>%
+  summarise(noun = length(which(pos == "noun"))/n(),
+            adjective = length(which(pos == "adjective"))/n(),
+            verb = length(which(pos == "verb"))/n()) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID))  %>%
+  gather("a.pos", "prop", 3:5) %>%
+  group_by(gender, a.pos, cue.pos) %>%   
+  multi_boot_standard(column = "prop", na.rm = T) %>%
+  filter(!is.na(gender))
+
+ggplot(pos.prop.gender.cuetype, aes(x = reorder(a.pos, -mean), y = mean, 
+                                 colour = gender, group = gender)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  facet_grid(.~cue.pos) +
+  xlab("Gender") +
+  ylab("Prop. assocations") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Concreteness{.tabset}
+
+Read in concreteness (from Brysbaert et al., 2013).
+```{r}
+conc <- read.csv("../data/brysbaert_corpus.csv",header=TRUE) %>%
+  select(Word, Conc.M)
+
+
+d.all.conc = d.all %>%
+            left_join(conc, by = c("cue.lemma" = "Word")) %>%
+            rename(cue.conc = Conc.M) %>%
+            left_join(conc, by = c("a1.lemma" = "Word")) %>%
+            rename(a1.conc = Conc.M) %>%
+            left_join(conc, by = c("a2.lemma" = "Word")) %>%
+            rename(a2.conc = Conc.M) %>%
+            left_join(conc, by = c("a3.lemma" = "Word")) %>%
+            rename(a3.conc = Conc.M) %>%
+            select(userID:education, contains(".conc"))
+```
+
+### All 
+```{r}
+all.conc.means = d.all.conc %>%
+  gather("word_type", "concreteness", 6:9) %>%
+  mutate(word_type = as.factor(word_type)) %>%
+  filter(!is.na(concreteness)) %>%
+  group_by(userID, word_type) %>%
+  summarise(mean.concreteness = mean(concreteness)) %>%
+  group_by(word_type) %>%
+  multi_boot_standard(column = "mean.concreteness", na.rm = T) 
+
+levels(all.conc.means$word_type) = c("a1", "a2", "a3", "cue")
+all.conc.means$word_type = factor(all.conc.means$word_type,levels(all.conc.means$word_type)[c(4, 1:3)])
+
+ggplot(all.conc.means, aes(x = word_type, y = mean, 
+                              group = 1)) +
+  geom_line() +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower))+
+  xlab("Word type") +
+  ylab("Mean concreteness of word type") +
+  theme_bw(base_size = 15)  +
+  theme(legend.position = "none")
+```
+
+### Education
+```{r}
+d.conc.educ = d.all.conc %>%
+  gather("a.type", "concreteness", 7:9) %>%
+  filter(!is.na(concreteness)) %>%
+  group_by(userID) %>%
+  summarise(mean.concreteness= mean(concreteness)) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID))  %>%
+  group_by(education) %>%
+  filter(education > 1) %>%
+  filter(!is.na(education)) %>%
+  multi_boot_standard(column = "mean.concreteness", na.rm = T)
+
+ggplot(d.conc.educ, aes(x = education, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Education") +
+  ylab("Mean concreteness of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### Age
+```{r}
+d.conc.age = d.all.conc %>%
+  gather("a.type", "concreteness", 7:9) %>%
+  filter(!is.na(concreteness)) %>%
+  group_by(userID) %>%
+  summarise(mean.concreteness= mean(concreteness)) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID))  %>%
+  group_by(age.bin) %>%
+  filter(!is.na(age.bin))%>%
+  multi_boot_standard(column = "mean.concreteness", na.rm = T)
+
+ggplot(d.conc.age, aes(x = age.bin, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Age bin") +
+  ylab("Mean concretness of associates") +
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+d.conc.age.atype = d.all.conc %>%
+  gather("a.type", "concreteness", 7:9) %>%
+  filter(!is.na(concreteness)) %>%
+  group_by(userID, a.type) %>%
+  summarise(mean.concreteness= mean(concreteness)) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID))  %>%
+  group_by(age.bin, a.type) %>%
+  filter(!is.na(age.bin))%>%
+  multi_boot_standard(column = "mean.concreteness", na.rm = T)
+
+ggplot(d.conc.age.atype, aes(x = age.bin, y = mean,
+                             group = a.type, color = a.type)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  geom_line() +
+  xlab("Age bin") +
+  ylab("Mean concretness of associates") +
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### Gender
+```{r}
+d.conc.gender = d.all.conc %>%
+  gather("a.type", "concreteness", 7:9) %>%
+  filter(!is.na(concreteness)) %>%
+  group_by(userID) %>%
+  summarise(mean.concreteness= mean(concreteness)) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID))  %>%
+  group_by(gender) %>%
+  filter(!is.na(gender)) %>%
+  multi_boot_standard(column = "mean.concreteness", na.rm = T)
+
+ggplot(d.conc.gender , aes(x = gender, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Gender") +
+  ylab("Mean concreteness of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) 
+```
+
+
+## Polarity{.tabset}
+
+The textblob toolkit has both polarity and subjectivity measures, so I just through them in, but there's a lot of missing data for both measures.
+
+### All 
+```{r}
+all.pol.means = d.all %>%
+  select(userID, education, contains("polarity")) %>%
+  gather("word_type", "polarity", 2:5) %>%
+  mutate(word_type = as.factor(word_type)) %>%
+  filter(!is.na(polarity)) %>%
+  filter(polarity != 0) %>%
+  group_by(userID, word_type) %>%
+  summarise(mean.polarity= mean(polarity)) %>%
+  group_by(word_type) %>%
+  multi_boot_standard(column = "mean.polarity", na.rm = T) 
+
+levels(all.pol.means$word_type) = c("a1", "a2", "a3", "cue")
+all.pol.means$word_type = factor(all.pol.means$word_type,levels(all.pol.means$word_type)[c(4, 1:3)])
+
+ggplot(all.pol.means, aes(x = word_type, y = mean, 
+                              group = 1)) +
+  geom_line() +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower))+
+  xlab("Word type") +
+  ylab("Mean polarity of word type") +
+  theme_bw(base_size = 15)  +
+  theme(legend.position = "none")
+```
+
+
+### Education
+```{r}
+d.polarity.educ = d.all %>%
+  select(userID, education, contains("polarity"), -cue.polarity) %>%
+  gather("a.type", "polarity", 3:5) %>%
+  filter(!is.na(polarity)) %>%
+  filter(polarity != 0) %>%
+  group_by(userID) %>%
+  summarise(mean.polarity = mean(polarity)) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID))  %>%
+  group_by(education) %>%
+  filter(education > 1) %>%
+  filter(!is.na(education)) %>%
+  multi_boot_standard(column = "mean.polarity", na.rm = T)
+
+ggplot(d.polarity.educ, aes(x = education, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Education") +
+  ylab("Mean polarity of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### Age
+```{r}
+d.polarity.age = d.all %>%
+  select(userID, education, contains("polarity"), -cue.polarity) %>%
+  gather("a.type", "polarity", 3:5) %>%
+  filter(!is.na(polarity)) %>%
+  filter(polarity != 0) %>%
+  group_by(userID) %>%
+  summarise(mean.polarity = mean(polarity)) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID))  %>%
+  group_by(age.bin) %>%
+  filter(!is.na(age.bin)) %>%
+  multi_boot_standard(column = "mean.polarity", na.rm = T)
+
+ggplot(d.polarity.age, aes(x = age.bin, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Age bin") +
+  ylab("Mean polarity of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+Older folks are happier?
+
+### Gender
+```{r}
+d.polarity.gender = d.all %>%
+  select(userID, education, contains("polarity"), -cue.polarity) %>%
+  gather("a.type", "polarity", 3:5) %>%
+  filter(!is.na(polarity)) %>%
+  filter(polarity != 0) %>%
+  group_by(userID) %>%
+  summarise(mean.polarity = mean(polarity)) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID))  %>%
+  group_by(gender) %>%
+  filter(!is.na(gender)) %>%
+  multi_boot_standard(column = "mean.polarity", na.rm = T)
+
+ggplot(d.polarity.gender, aes(x = gender, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Education") +
+  ylab("Mean polarity of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+## Subjectivity{.tabset}
+
+### All 
+```{r}
+all.subj.means = d.all %>%
+  select(userID, education, contains("subjectivity")) %>%
+  gather("word_type", "subjectivity", 2:5)%>%
+  mutate(word_type = as.factor(word_type)) %>%
+  filter(!is.na(subjectivity)) %>%
+  filter(subjectivity != 0) %>%
+  group_by(userID, word_type) %>%
+  summarise(mean.subjectivity = mean(subjectivity)) %>%
+  group_by(word_type) %>%
+  multi_boot_standard(column = "mean.subjectivity", na.rm = T) 
+
+levels(all.subj.means$word_type) = c("a1", "a2", "a3", "cue")
+all.subj.means$word_type = factor(all.subj.means$word_type,levels(all.subj.means$word_type)[c(4, 1:3)])
+
+ggplot(all.subj.means, aes(x = word_type, y = mean, 
+                              group = 1)) +
+  geom_line() +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower))+
+  xlab("Word Type") +
+  ylab("Mean subjectivity of word type") +
+  theme_bw(base_size = 15)  +
+  theme(legend.position = "none")
+```
+
+### Education
+```{r}
+d.subj.educ = d.all %>%
+  select(userID, education, contains("subjectivity"), -cue.subjectivity) %>%
+  gather("a.type", "subjectivity", 3:5) %>%
+  filter(!is.na(subjectivity)) %>%
+  filter(subjectivity != 0) %>%
+  group_by(userID) %>%
+  summarise(mean.subjectivity = mean(subjectivity)) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID))  %>%
+  group_by(education) %>%
+  filter(education > 1) %>%
+  filter(!is.na(education)) %>%
+  multi_boot_standard(column = "mean.subjectivity", na.rm = T)
+
+ggplot(d.subj.educ, aes(x = education, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Education") +
+  ylab("Mean subjectivity of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### Age
+```{r}
+d.subjectivity.age = d.all %>%
+  select(userID, education, contains("subjectivity"), -cue.subjectivity) %>%
+  gather("a.type", "subjectivity", 3:5) %>%
+  filter(!is.na(subjectivity)) %>%
+  filter(subjectivity != 0) %>%
+  group_by(userID) %>%
+  summarise(mean.subjectivity = mean(subjectivity)) %>%
+  left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID))  %>%
+  group_by(age.bin) %>%
+  filter(!is.na(age.bin))%>%
+  multi_boot_standard(column = "mean.subjectivity", na.rm = T)
+
+ggplot(d.subjectivity.age, aes(x = age.bin, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Age bin") +
+  ylab("Mean subjectivity of associates") +
+  theme_bw(base_size = 15) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+### Gender
+```{r}
+d.subjectivity.gender = d.all %>%
+  select(userID, gender, contains("subjectivity"), -cue.subjectivity) %>%
+  gather("a.type", "subjectivity", 3:5) %>%
+  filter(!is.na(subjectivity)) %>%
+  filter(subjectivity != 0) %>%
+  group_by(userID) %>%
+  summarise(mean.subjectivity = mean(subjectivity)) %>%
+  left_join(d.all %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(gender, userID))  %>%
+  group_by(gender) %>%
+  filter(!is.na(gender)) %>%
+  multi_boot_standard(column = "mean.subjectivity", na.rm = T)
+
+ggplot(d.subjectivity.gender , aes(x = gender, y = mean)) +
+  geom_pointrange(aes(ymax = ci_upper, ymin = ci_lower)) +
+  xlab("Gender") +
+  ylab("Mean subjectivity of associates") +
+  geom_line() +
+  geom_point() + 
+  theme_bw(base_size = 15)
+```
