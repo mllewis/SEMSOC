@@ -1,0 +1,519 @@
+---
+title: SEMSOC 
+subtitle: Semantic sphericity analyses
+author: Molly Lewis and Gary Lupyan
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    number_sections: false
+    theme: cerulean
+    toc_float: true
+    code_folding: hide
+---
+
+To what extent does the cue drive the different associations (i.e., cue vs. a1, cue vs. a2, cue vs. a3), and how does this pattern vary across demographic groups?
+
+Other questions:
+
+* To what extent does the depenence of the generated word on the previous word vary across the task? [e.g. cue vs. a1, a1 vs. a2, a2 vs. a3] 
+* To what extent are the associations related to eachother [e.g. a1 vs. a2, a2 vs. a3, a1 vs. a3] 
+
+Several measures:
+
+* conditional probability [derived both from subset and full set]
+* to what extent does the cue drive associations, relative to a-a pairs:  [Pr(a1 | cue) + Pr(a2 | cue) + Pr(a3 | cue)] / [Pr(a2 | a1) + Pr(a3 | a1) + Pr(a3 | a2)]
+* coefficient of variance
+
+I've omitted errorbars because bootstrapping is slow and almost every difference is significant.
+
+```{r setup, include = F}
+rm(list = ls())
+
+# load packages
+library(knitr)
+library(rmarkdown)
+library(ggplot2)
+library(dplyr)
+library(langcog)
+library(tidyr)
+library(broom)
+library(reshape2)
+library(RCurl)
+library(tidytext)
+library(gtools)
+library(purrr)
+
+opts_chunk$set(echo = T, message = F, warning = F, 
+               error = F, cache = T, tidy = F)
+
+```
+
+```{r}
+d = read.csv("../data/associations_ppdetails_en_05_01_2015.csv")
+
+d.clean = d %>%
+  filter(gender == "Ma"| gender ==  "Fe") %>%
+  filter(education > 0) %>%
+  filter(nativeLanguage != "") %>%
+  mutate(gender = droplevels(gender),
+         gender = plyr::revalue(gender,c("Fe" = "F", "Ma" = "M")),
+         userID = as.factor(userID),
+         nativeLanguage = as.factor(tolower(nativeLanguage)))
+
+d.clean = d.clean %>%
+  gather("association", "word", 7:9) %>%
+  mutate(word = gsub("\\bx\\b", "NA", word)) %>% # remove missing words
+  spread("association", "word") %>%
+  rename(a1 = asso1Clean,
+         a2 = asso2Clean,
+         a3 = asso3Clean)
+```
+
+
+# Conditional probabilities 
+
+The conditional probability of w1-> w2 is, p(w2|w1) = count(w1-> w2)/count(w1).
+
+There are at least two ways to calculcate these conditional probabilities:  based on the full dataset, or across each subset of interest. I initially did it by subset but this makes it so you can't make inferences across groups because of sparsity; the better way is probably just using the full dataset. This is how I've done it below.
+
+Conditional probabilities are calculated for each pair -- is this the right way to do this? i.e., I've counted up all the times that w1 -> w2 for each pairing (e.g. cue_a1), and calculated the conditional probabilities based on that.
+
+Get full conditional probabilities.
+```{r}
+# conditional probability function
+get_trans_prob <- function(df, w1, w2) {
+  names(df)[which(names(df) == w1)] = "w1"
+  names(df)[which(names(df) == w2)] = "w2"
+  
+  # remove NAs and get bigrams
+  df.f = filter(df, w1 != "NA" & w2 != "NA") %>%
+    mutate(bigram = paste(w1, w2))
+
+  # get counts of w1
+  w1.counts = df.f %>%
+    count(w1) %>%
+    rename(w1.counts = n) 
+  
+  # calculate trans prob [count(w1->w2)/count(w1)]
+  df.f %>%
+    count(bigram, w1) %>%
+    rename(joint.counts = n) %>%
+    left_join(w1.counts, by="w1") %>%
+    mutate(trans.prob = joint.counts/w1.counts) %>%
+    select(bigram,trans.prob) %>%
+    arrange(trans.prob) %>%
+    ungroup() 
+}
+
+# get conditional probability pairs of intersest
+perms = permutations(4, 2, c(0:3)) %>%
+  as.data.frame() %>%
+  rename(w1 = V1, w2 = V2) %>%
+  filter(w1 < w2) %>%
+  mutate(w1 = as.factor(w1),
+         w2 = as.factor(w2),
+         w1 = plyr::mapvalues(w1, from = c("0", "1", "2", "3"), to = c("cue", "a1", "a2", "a3")),
+         w2 = plyr::mapvalues(w2, from = c("0", "1", "2", "3"), to = c("cue", "a1", "a2", "a3")),
+         pair = paste(w1, w2, sep = "_"))
+
+# get all conditional probabilities
+all.cb = pmap(list(as.list(perms$w1), as.list(perms$w2), as.list(perms$pair)), 
+     function(x, y, z) {
+       get_trans_prob(d.clean, x[[1]], y[[1]]) %>%
+         mutate(pair = z)}) %>%
+  bind_rows() %>%
+  mutate(pair = as.factor(pair))
+```
+
+Conditional probability distributions
+```{r}
+ggplot(all.cb, aes(x = trans.prob, group = pair, fill = pair)) +
+  geom_density(alpha = .4) +
+  xlab("conditional probability") +
+  theme_bw(base_size = 18)
+
+ggplot(filter(all.cb, trans.prob<.03), aes(x = trans.prob, group = pair, fill = pair)) +
+  geom_density(alpha = .4) +
+  xlab("conditional probability") +
+  theme_bw(base_size = 18)
+
+ggplot(filter(all.cb, trans.prob<.03),
+       aes(y = trans.prob, x = pair, fill = pair)) +
+  geom_boxplot(alpha = .4) +
+  ylab("conditional probability") +
+  theme_bw(base_size = 18)
+
+```
+
+This is a sanity check on the conditional probabilities. Cues drive associations more than association associations (i.e. p(a|cue) > p(a|a)). But -- the order of p(a|cue) is surprising; I think this is because the mass is somewhat bimodal (the means, below, make sense).
+
+
+## Full sample{.tabset}
+### Cue pairs
+Merge in bigrams
+```{r}
+d.clean = d.clean %>%
+  mutate(b.cue_a1 = paste(cue, a1),
+         b.cue_a2 = paste(cue, a2),
+         b.cue_a3 = paste(cue, a3),
+         b.a1_a2 = paste(a1, a2),
+         b.a2_a3 = paste(a2, a3),
+         b.a1_a3 = paste(a1, a3)) %>%
+  mutate_each(funs(ifelse(grepl("NA",.),"NA",.)), b.cue_a1:b.a1_a3) # remove NA
+
+# merge in bigrams
+d.clean.bigram = left_join(d.clean, 
+                           filter(all.cb, pair == "cue_a1") %>% select(-pair),
+                           by=c("b.cue_a1" = "bigram")) %>%
+                  rename(tp.cue_a1 = trans.prob) %>%
+                  left_join(filter(all.cb, pair == "cue_a2") %>% select(-pair),
+                           by=c("b.cue_a2" = "bigram")) %>%
+                  rename(tp.cue_a2 = trans.prob) %>%
+                  left_join(filter(all.cb, pair == "cue_a3") %>% select(-pair),
+                           by=c("b.cue_a3" = "bigram")) %>%
+                  rename(tp.cue_a3 = trans.prob)  %>%
+                  left_join(filter(all.cb, pair == "a1_a2") %>% select(-pair),
+                           by=c("b.a1_a2" = "bigram")) %>%
+                  rename(tp.a1_a2 = trans.prob)  %>%
+                  left_join(filter(all.cb, pair == "a2_a3") %>% select(-pair),
+                           by=c("b.a2_a3" = "bigram")) %>%
+                  rename(tp.a2_a3 = trans.prob)  %>%
+                  left_join(filter(all.cb, pair == "a1_a3") %>% select(-pair),
+                           by=c("b.a1_a3" = "bigram")) %>%
+                  rename(tp.a1_a3 = trans.prob) %>%
+                  select(userID, age, gender, education, contains("tp."))
+```
+
+
+```{r}
+tp.full.ms = d.clean.bigram %>%
+             gather("pair", "tp", 5:7) %>%
+             group_by(userID, pair) %>%
+             summarise(mean = mean(tp, na.rm = T)) %>%
+             group_by(pair) %>%
+             summarise(mean = mean(mean, na.rm = T))
+
+ggplot(tp.full.ms, aes(y = mean, x = pair, group = 1)) +
+  geom_point() +
+  geom_line()+
+  xlab("pair") +
+  theme_bw(base_size = 18)
+```
+
+### Association pairs
+```{r}
+tp.full.ms = d.clean.bigram %>%
+             gather("pair", "tp", 8:10) %>%
+             group_by(userID, pair) %>%
+             summarise(mean = mean(tp, na.rm = T)) %>%
+             group_by(pair) %>%
+             summarise(mean = mean(mean, na.rm = T))
+
+ggplot(tp.full.ms, aes(y = mean, x = pair, group = 1)) +
+  geom_point() +
+  geom_line()+
+  xlab("pair") +
+  theme_bw(base_size = 18)
+```
+
+## Education{.tabset}
+### Cue pairs
+```{r}
+tp.educ.ms = filter(d.clean.bigram, education > 1) %>%
+             gather("pair", "tp", 5:7) %>%
+             group_by(userID, pair) %>%
+             summarise(mean = mean(tp, na.rm = T)) %>%
+             left_join(d.clean %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID)) %>%
+             group_by(pair, education) %>%
+             summarise(mean = mean(mean, na.rm = T)) %>%
+             ungroup() %>%
+             mutate(education = as.factor(education))
+
+ggplot(tp.educ.ms, aes(y = mean, x = pair, group = education, color = education)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+
+ggplot(tp.educ.ms, aes(y = mean, x = education, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("education") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+```
+
+### Asssociation pairs
+```{r}
+tp.educ.ms = filter(d.clean.bigram, education > 1) %>%
+             gather("pair", "tp", 8:10) %>%
+             group_by(userID, pair) %>%
+             summarise(mean = mean(tp, na.rm = T)) %>%
+             left_join(d.clean %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(education, userID)) %>%
+             group_by(pair, education) %>%
+             summarise(mean = mean(mean, na.rm = T)) %>%
+             ungroup() %>%
+             mutate(education = as.factor(education))
+
+ggplot(tp.educ.ms, aes(y = mean, x = pair, group = education, color = education)) +
+  geom_point() + 
+  geom_line()+
+  xlab("pair") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+
+ggplot(tp.educ.ms, aes(y = mean, x = education, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("education") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+```
+            
+## Age{.tabset}
+```{r}
+d.pos.age = d.clean.bigram %>%
+            filter(age > 15 & age < 75) %>%
+            mutate(age.bin = cut_width(age, width = 10))
+
+d.clean.bigram = d.clean.bigram  %>%
+              left_join(d.pos.age %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID)) %>%
+              filter(!is.na(age.bin))
+```
+
+### Cue pairs
+```{r}
+tp.age.ms = gather(d.clean.bigram, "pair", "tp", 5:7) %>%
+            group_by(pair, userID) %>%
+            summarise(mean = mean(tp, na.rm = T)) %>%
+            left_join(d.clean.bigram %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID)) %>%
+            group_by(pair, age.bin) %>%
+            summarise(mean = mean(mean, na.rm = T))
+
+ggplot(tp.age.ms, aes(y = mean, x = pair, group = age.bin, color = age.bin)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+
+ggplot(tp.age.ms, aes(y = mean, x = age.bin, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("age bin") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+```
+
+### Association pairs
+```{r}
+tp.age.ms = gather(d.clean.bigram, "pair", "tp", 8:10) %>%
+            group_by(pair, userID) %>%
+            summarise(mean = mean(tp, na.rm = T)) %>%
+            left_join(d.clean.bigram %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID)) %>%
+            group_by(pair, age.bin) %>%
+            summarise(mean = mean(mean, na.rm = T))
+
+ggplot(tp.age.ms, aes(y = mean, x = pair, group = age.bin, color = age.bin)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+
+ggplot(tp.age.ms, aes(y = mean, x = age.bin, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("age.bin") +
+  ylab("mean cp")+
+  theme_bw(base_size = 18)
+```
+As you get older, the associations more coherent with eachother.
+
+# Cue probabilities, relative to associative probailities
+[Pr(a1 | cue) + Pr(a2 | cue) + Pr(a3 | cue)] / [Pr(a2 | a1) + Pr(a3 | a1) + Pr(a3 | a2)]
+
+## Education
+```{r}
+relative.educ.ms = d.clean.bigram %>%
+          gather("pair", "tp", 5:10) %>%
+          group_by(pair, userID) %>%
+          summarise(mean = mean(tp, na.rm = T)) %>%
+          left_join(d.clean %>% group_by(userID) %>% slice(1) 
+                               %>% ungroup() %>% select(education, userID)) %>%
+          spread("pair", "mean")  %>%
+          mutate(cue_drivenness = tp.cue_a1 + tp.cue_a2 + tp.cue_a3,
+                 a_drivenness = tp.a1_a2 + tp.a2_a3 + tp.a1_a3) %>%
+          select(-contains("tp.")) %>%
+          mutate(relative_driven = cue_drivenness/a_drivenness) %>%
+          group_by(education) %>%
+          summarise(mean = mean(relative_driven, na.rm = T)) 
+
+ggplot(relative.educ.ms, aes(y = mean, x = education, group = 1)) +
+  geom_point() + 
+  geom_line()+
+  xlab("education") +
+  ylab("relative cp")+
+  theme_bw(base_size = 18)
+```
+
+## Age
+```{r}
+relative.age.ms = d.clean.bigram %>%
+          gather("pair", "tp", 5:10) %>%
+          group_by(pair, userID) %>%
+          summarise(mean = mean(tp, na.rm = T)) %>%
+          left_join(d.clean.bigram %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID)) %>%
+          spread("pair", "mean")  %>%
+          mutate(cue_drivenness = tp.cue_a1 + tp.cue_a2 + tp.cue_a3,
+                 a_drivenness = tp.a1_a2 + tp.a2_a3 + tp.a1_a3) %>%
+          select(-contains("tp.")) %>%
+          mutate(relative_driven = cue_drivenness/a_drivenness) %>%
+          group_by(age.bin) %>%
+          summarise(mean = mean(relative_driven, na.rm = T)) 
+
+ggplot(relative.age.ms, aes(y = mean, x = age.bin, group = 1)) +
+  geom_point() + 
+  geom_line()+
+  xlab("age") +
+  ylab("relative cp")+
+  theme_bw(base_size = 18)
+```
+
+Less driven by cue with age.
+
+# Coefficient of variation
+## Education{.tabset}
+### Conditional probability distribution
+```{r}
+# Coeffificent of variation (log distribution); from: https://en.wikipedia.org/wiki/Coefficient_of_variation
+cv_log <- function(probs) {
+  var.probs.log = var(log(probs), na.rm = T)
+  sqrt((exp(1)^var.probs.log)-1)
+}
+
+educ.cv = d.clean.bigram %>%
+          gather("pair", "tp", 5:10) %>%
+          filter(education > 1) %>%
+          mutate(education = as.factor(education)) %>%
+          group_by(pair, education) %>%
+          summarize(cv = cv_log(tp)) %>%
+          ungroup()
+
+ggplot(educ.cv, aes(y = cv, x = pair, group = education, color = education)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+ggplot(educ.cv, aes(y = cv, x = education, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("education") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18)
+```
+
+### Raw bigram count distribution
+```{r}
+bigram.counts.educ = d.clean %>%
+  gather("pair", "bigram", 10:15) %>%
+  mutate(pair = as.factor(pair)) %>%
+  filter(bigram != "NA") %>%
+  count(bigram, pair, education) %>%
+  ungroup()
+
+educ.cv = bigram.counts.educ %>%
+          filter(education > 1) %>%
+          mutate(education = as.factor(education)) %>%
+          group_by(pair, education) %>%
+          summarize(cv = cv_log(n)) %>%
+          ungroup()
+
+ggplot(educ.cv, aes(y = cv, x = pair, group = education, color = education)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(educ.cv, aes(y = cv, x = education, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("education") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18)
+```
+
+## Age{.tabset}
+### Conditional probability distribution
+```{r}
+age.cv = d.clean.bigram %>%
+          gather("pair", "tp", 5:10) %>%
+          left_join(d.clean.bigram %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID)) %>%
+          group_by(pair, age.bin) %>%
+          summarize(cv = cv_log(tp)) %>%
+          ungroup()
+
+ggplot(age.cv, aes(y = cv, x = pair, group = age.bin, color = age.bin)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+ggplot(age.cv, aes(y = cv, x = age.bin, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("age") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18)
+```
+
+### Raw bigram count distribution
+```{r}
+bigram.counts.age = d.clean %>%
+  gather("pair", "bigram", 10:15) %>%
+  left_join(d.clean.bigram %>% group_by(userID) %>% slice(1) 
+                         %>% ungroup() %>% select(age.bin, userID)) %>%
+  mutate(pair = as.factor(pair)) %>%
+  filter(bigram != "NA") %>%
+  filter(age.bin != "NA") %>%
+  count(bigram, pair, age.bin) %>%
+  ungroup()
+
+age.cv = bigram.counts.age %>%
+          group_by(pair, age.bin) %>%
+          summarize(cv = cv_log(n)) %>%
+          ungroup()
+
+ggplot(age.cv, aes(y = cv, x = pair, group = age.bin, color = age.bin)) +
+  geom_point() + 
+  geom_line() +
+  xlab("pair") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+ggplot(age.cv, aes(y = cv, x = age.bin, group = pair, color = pair)) +
+  geom_point() + 
+  geom_line() +
+  xlab("age.bin") +
+  ylab("mean cv")+
+  theme_bw(base_size = 18)
+```

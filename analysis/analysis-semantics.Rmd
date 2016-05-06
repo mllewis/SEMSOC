@@ -150,7 +150,8 @@ ggplot(freq.ms.as2, aes(y = mean, x = association,
   scale_x_discrete(labels=c("1", "2", "3")) +
   scale_colour_discrete(labels = c("elementary", "HS", "bachelor", "master"))
 ```
-Frequency decreases across assocates, for all age groups.
+
+sFrequency decreases across assocates, for all age groups.
 
 
 ### Age
@@ -187,6 +188,7 @@ freq.all.ms = freq.ms %>%
 
 tidy(lm(mean.assoc.freq~age + education, filter(freq.all.ms, education > 0)))
 ```
+
 Education does not predict frequency, controling for age.
 
 Change in frequency across associates.
@@ -231,6 +233,7 @@ freq.all.ms = freq.ms %>%
 
 tidy(lm(mean.assoc.freq~age + gender + education, freq.all.ms))
 ```
+
 Females have higher frequency associates, controling for age and education.
 
 Change in frequency across associates.
@@ -254,6 +257,7 @@ ggplot(freq.ms.as2, aes(y = mean, x = association,
 
 ### Language/country
 Mean frequency
+ß
 ```{r}
 top_langs = d.clean %>%
         group_by(userID) %>%
@@ -281,6 +285,7 @@ ggplot(freq.lang.ms, aes(y = mean, x = reorder(nativeLanguage,-mean))) +
   xlab("country (top 10)") +
   ylab("mean log frequency of associates")
 ```
+
 Second language speakers have higher frequency associates than native speakers?
 
 ## Part of speech
@@ -522,6 +527,7 @@ ggplot(pos.prop.age, aes(x = age.bin, y = mean, colour = type, group = type)) +
   theme_bw(base_size = 15) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+
 No differences of POS by age. 
 
 #### Condition on cue
@@ -589,6 +595,7 @@ ggplot(pos.prop.gender, aes(x = reorder(type,-mean),
   theme_bw(base_size = 15) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+
 No effect of gender.
 
 #### Condition on cue
@@ -755,7 +762,7 @@ ggplot(d.conc.gender , aes(x = gender, y = mean)) +
 
 ## Polarity{.tabset}
 
-The textblob toolkit has both polarity and subjectivity measures, so I just through them in, but there's a lot of missing data for both measures.
+The textblob toolkit has both polarity and subjectivity measures, so I just threw them in, but there's a lot of missing data for both measures.
 
 ### All 
 ```{r}
@@ -834,6 +841,7 @@ ggplot(d.polarity.age, aes(x = age.bin, y = mean)) +
   theme_bw(base_size = 15) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+
 Older folks are happier?
 
 ### Gender
@@ -961,3 +969,4 @@ ggplot(d.subjectivity.gender , aes(x = gender, y = mean)) +
   geom_point() + 
   theme_bw(base_size = 15)
 ```
+
